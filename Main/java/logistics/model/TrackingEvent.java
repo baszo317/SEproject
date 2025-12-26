@@ -25,7 +25,7 @@ public class TrackingEvent {
         this.exceptionType = exceptionType;
     }
 
-    // ★ 加上這些 getter，讓其他 package 也能讀
+    //  加上這些 getter，讓其他 package 也能讀
     public TrackingEventType getType() {
         return type;
     }
