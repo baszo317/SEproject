@@ -20,7 +20,7 @@ public class Parcel {
     public boolean fragile;        // 易碎品
     public boolean international;  // 國際貨件
 
-    // ★ 改成 private，加方法來操作
+    //改成 private，加方法來操作
     private List<TrackingEvent> events = new ArrayList<>();
 
     public Parcel(String trackingNumber, Customer sender, ServiceType serviceType,
@@ -50,12 +50,12 @@ public class Parcel {
         return events.get(events.size() - 1);
     }
 
-    // ★ 只讀用這個
+    //只讀用這個
     public List<TrackingEvent> getEvents() {
         return Collections.unmodifiableList(events);
     }
 
-    // ★ 加一個方法讓外部可以新增事件
+    //加一個方法讓外部可以新增事件
     public void addEvent(TrackingEvent event) {
         events.add(event);
     }

@@ -44,7 +44,7 @@ public class BillingRecord {
         items.add(item);
     }
 
-    // ★ 這裡改成用 item.getAmount()
+    // 這裡改成用 item.getAmount()
     public double getTotalAmount() {
         return items.stream()
                 .mapToDouble(i -> i.getAmount())

@@ -80,7 +80,7 @@ public class LogisticsCore {
                 "Package created and picked up",
                 null
         );
-        p.addEvent(event);   // ★ 改用方法
+        p.addEvent(event);   // 改用方法
 
         parcels.put(trackingNo, p);
         return p;
@@ -122,7 +122,7 @@ public class LogisticsCore {
                 description,
                 exceptionType
         );
-        p.addEvent(e);   // ★ 改用方法
+        p.addEvent(e);   // 改用方法
     }
 
     private boolean canUpdateTracking(User user, TrackingEventType type) {
