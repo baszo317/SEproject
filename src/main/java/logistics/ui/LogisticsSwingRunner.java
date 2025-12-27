@@ -1,5 +1,6 @@
 package logistics.ui;
 
+import logistics.api.impl.LogisticsApiImpl;
 import logistics.core.LogisticsCore;
 import logistics.enums.*;
 import logistics.model.*;
@@ -13,6 +14,7 @@ import java.util.function.Function;
 public class LogisticsSwingRunner {
 
     private final LogisticsCore core = new LogisticsCore();
+    private final LogisticsApiImpl api = new LogisticsApiImpl(core, new User("admin", Role.ADMIN, null));
 
   
     private final Map<Long, Customer> customersCreated = new LinkedHashMap<>();
