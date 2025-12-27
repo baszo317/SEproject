@@ -22,7 +22,6 @@ Java 物件導向實作：客戶管理、包裹服務分類、追蹤事件、計
 
 \- Language: Java
 
-\- Testing: JUnit（後續補上單元測試）
-
+\- Testing: JUnit
 
 
