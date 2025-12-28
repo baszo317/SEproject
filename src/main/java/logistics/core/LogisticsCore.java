@@ -323,6 +323,23 @@ public double calculateCharge(Parcel p, double distanceKm) {
         }
         return defaultMethod;
     }
+    
+    public void deleteCustomer(User operator, long customerId) {
+    if (operator == null) {
+        throw new IllegalArgumentException("operator is null");
+    }
+
+    Role role = operator.getRole();
+    if (role != Role.ADMIN && role != Role.CUSTOMER_SERVICE) {
+        throw new SecurityException("只有管理員或客服可刪除顧客");
+    }
+
+    Customer removed = customers.remove(customerId);
+    if (removed == null) {
+        throw new IllegalArgumentException("找不到 customerId=" + customerId);
+    }
+}
+
 
    public List<BillingRecord> getBillingHistoryForCustomer(long customerId) {
     List<BillingRecord> list = new ArrayList<>();

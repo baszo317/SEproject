@@ -73,7 +73,40 @@ class LogisticsCoreTest {
     }
 
     /* ===================== Tests ===================== */
+    @Test
+    @DisplayName("1.1 客戶管理：刪除顧客後不可再取回；非 ADMIN/客服不得刪除")
+void deleteCustomer_removesCustomer_and_checkPermission(TestReporter reporter) {
+    reporter.publishEntry("INFO", "開始測試：刪除顧客 + 權限檢查");
 
+    // 建立一個待刪顧客
+    Customer c = core.createCustomer(
+            "ToDelete", "Somewhere", "0999", "del@mail.com",
+            CustomerType.NON_CONTRACT, BillingPreference.CASH_ON_DELIVERY
+    );
+    reporter.publishEntry("SETUP", "建立顧客 id=" + c.id + ", name=" + c.name);
+
+    // 確認建立後可取回
+    assertNotNull(core.getCustomer(c.id), "刪除前 getCustomer 應該取回得到");
+    reporter.publishEntry("VERIFY", "刪除前可取回顧客");
+
+    // 非授權角色（例如 DRIVER）嘗試刪除 → 應拒絕
+    reporter.publishEntry("EXPECT_DENY", "DRIVER 嘗試刪除（預期 SecurityException）");
+    assertThrows(SecurityException.class, () -> core.deleteCustomer(driver, c.id));
+
+    // ADMIN 刪除 → 應成功
+    reporter.publishEntry("EXPECT_ALLOW", "ADMIN 刪除（預期成功）");
+    assertDoesNotThrow(() -> core.deleteCustomer(admin, c.id));
+
+    // 刪除後不可取回
+    assertNull(core.getCustomer(c.id), "刪除後 getCustomer 應回傳 null");
+    reporter.publishEntry("VERIFY", "刪除後不可取回（getCustomer == null）");
+
+    // 再刪一次（不存在）→ 應丟 IllegalArgumentException
+    reporter.publishEntry("EXPECT_ERROR", "刪除不存在 customerId（預期 IllegalArgumentException）");
+    assertThrows(IllegalArgumentException.class, () -> core.deleteCustomer(admin, c.id));
+
+    reporter.publishEntry("INFO", "PASS：刪除顧客 + 權限檢查完成");
+}
     @Test
     @DisplayName("1.1 客戶管理：建立後可用 id 取回")
     void createCustomer_and_getCustomer(TestReporter reporter) {
@@ -397,4 +430,5 @@ class LogisticsCoreTest {
 
         info(reporter, "PASS：合約客戶付款方式驗證成功");
     }
+    
 }
