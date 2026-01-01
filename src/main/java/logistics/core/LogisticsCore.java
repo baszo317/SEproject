@@ -6,11 +6,16 @@ import java.util.*;
 
 import logistics.enums.*;
 import logistics.model.*;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+
 
 /**
  * 系統核心：負責客戶管理、服務類型、包裹、追蹤、計費、查詢與權限控制
  */
 public class LogisticsCore {
+    
 
     private long customerSeq = 1;
     private long serviceTypeSeq = 1;
@@ -350,4 +355,83 @@ public double calculateCharge(Parcel p, double distanceKm) {
     }
     return list;
 }
+// 簡單 in-memory 帳號系統
+Map<String, User> usersByUsername = new HashMap<>();
+
+/* ========= 認證/帳號 [Auth] ========= */
+
+/**
+ * 註冊帳號（保存密碼雜湊）。
+ * - username 必須唯一
+ * - role=CUSTOMER 時必須綁定 customerProfile
+ */
+public User registerUser(String username, String rawPassword, Role role, Customer customerProfileOrNull) {
+    String u = normalizeUsername(username);
+    validatePassword(rawPassword);
+    if (role == null) {
+        throw new IllegalArgumentException("role is null");
+    }
+
+    if (usersByUsername.containsKey(u)) {
+        throw new IllegalArgumentException("username 已存在：" + u);
+    }
+    if (role == Role.CUSTOMER && customerProfileOrNull == null) {
+        throw new IllegalArgumentException("CUSTOMER 角色必須綁定 customerProfile");
+    }
+
+    String hash = hashPassword(rawPassword);
+    User user = new User(u, hash, role, role == Role.CUSTOMER ? customerProfileOrNull : null);
+    usersByUsername.put(u, user);
+    return user;
+}
+
+/**
+ * 登入：成功回傳 User；失敗丟例外。
+ */
+public User login(String username, String rawPassword) {
+    String u = normalizeUsername(username);
+    validatePassword(rawPassword);
+
+    User user = usersByUsername.get(u);
+    if (user == null) {
+        throw new SecurityException("帳號不存在");
+    }
+    String expectedHash = user.getPasswordHash();
+    if (expectedHash == null) {
+        throw new SecurityException("帳號未設密碼，禁止登入");
+    }
+
+    String actualHash = hashPassword(rawPassword);
+    if (!expectedHash.equals(actualHash)) {
+        throw new SecurityException("密碼錯誤");
+    }
+    return user;
+}
+
+private String normalizeUsername(String username) {
+    if (username == null) throw new IllegalArgumentException("username is null");
+    String u = username.trim();
+    if (u.isEmpty()) throw new IllegalArgumentException("username is blank");
+    return u;
+}
+
+private void validatePassword(String rawPassword) {
+    if (rawPassword == null) throw new IllegalArgumentException("password is null");
+    String p = rawPassword.trim();
+    if (p.length() < 6) throw new IllegalArgumentException("password 長度需至少 6");
+}
+
+/**
+ * 以 SHA-256 雜湊密碼，並使用 Base64 儲存（in-memory demo 用）。
+ */
+private String hashPassword(String rawPassword) {
+    try {
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+        byte[] digest = md.digest(rawPassword.getBytes(StandardCharsets.UTF_8));
+        return Base64.getEncoder().encodeToString(digest);
+    } catch (NoSuchAlgorithmException e) {
+        throw new IllegalStateException("SHA-256 not available", e);
+    }
+}
+
 }

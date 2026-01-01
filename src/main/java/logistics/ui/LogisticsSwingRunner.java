@@ -1,11 +1,13 @@
 package logistics.ui;
 
-import logistics.api.impl.LogisticsApiImpl;
 import logistics.core.LogisticsCore;
 import logistics.enums.*;
 import logistics.model.*;
 
 import javax.swing.*;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.*;
@@ -14,17 +16,32 @@ import java.util.function.Function;
 public class LogisticsSwingRunner {
 
     private final LogisticsCore core = new LogisticsCore();
-    private final LogisticsApiImpl api = new LogisticsApiImpl(core, new User("admin", Role.ADMIN, null));
 
-  
     private final Map<Long, Customer> customersCreated = new LinkedHashMap<>();
     private final Map<Long, ServiceType> serviceTypesCreated = new LinkedHashMap<>();
     private final Set<String> trackingNumbersCreated = new LinkedHashSet<>();
 
-    // 目前登入身份（預設 管理員）
-    private User currentUser = new User("admin", Role.ADMIN, null);
+    private User currentUser = null;
 
-    
+    /* ===================== Swing Runner 端的帳密系統（in-memory） ===================== */
+
+    private static class Account {
+        final String username;            // normalized username
+        final String passwordHash;        // SHA-256 + Base64
+        final Role role;
+        final Customer customerProfileOrNull;
+
+        Account(String username, String passwordHash, Role role, Customer customerProfileOrNull) {
+            this.username = username;
+            this.passwordHash = passwordHash;
+            this.role = role;
+            this.customerProfileOrNull = customerProfileOrNull;
+        }
+    }
+
+    private final Map<String, Account> accounts = new HashMap<>();
+    private boolean defaultAccountsBootstrapped = false;
+
     private static final String[] MAIN_OPTIONS = {
             "教學/操作說明",
             "1.1 客戶管理",
@@ -41,6 +58,14 @@ public class LogisticsSwingRunner {
     }
 
     private void run() {
+        bootstrapDefaultAccounts();
+
+        // 啟動先要求登入/註冊
+        if (!ensureLoggedIn()) {
+            showMessage("已離開系統。");
+            return;
+        }
+
         while (true) {
             int main = JOptionPane.showOptionDialog(
                     null,
@@ -70,10 +95,12 @@ public class LogisticsSwingRunner {
                     default -> showMessage("未知選項。");
                 }
             } catch (SecurityException se) {
+                String u = (currentUser == null) ? "(未登入)" : currentUser.getUsername();
+                String r = (currentUser == null) ? "(未登入)" : roleZh(currentUser.getRole());
                 error("權限不足", kvBlock(
                         "原因", se.getMessage(),
-                        "登入帳號", currentUser.getUsername(),
-                        "角色", roleZh(currentUser.getRole())
+                        "登入帳號", u,
+                        "角色", r
                 ));
             } catch (IllegalArgumentException iae) {
                 error("輸入/資料錯誤", kvBlock("原因", iae.getMessage()));
@@ -91,20 +118,20 @@ public class LogisticsSwingRunner {
     private void showTutorial() {
         String text =
                 h1("教學/操作說明") + "\n" +
-                "建議操作順序（最常用流程）：\n" +
-                "1) 到【1.6 安全與權限】切換角色（建議先用「管理員」或「客服人員」）。\n" +
-                "2) 到【1.1 客戶管理】建立客戶檔案（姓名/地址/電話/Email + 客戶類型 + 帳單偏好）。\n" +
-                "3) 到【1.2 包裹服務分類】建立服務類型（包裹類型/重量級距/配送時效 + 定價與附加費）。\n" +
-                "4) 到【1.3 包裹收件與準備】建立包裹（系統會自動分配追蹤編號）。\n" +
-                "5) 到【1.4 追蹤與物流】新增追蹤事件、查目前狀態、查歷史、依條件搜尋。\n" +
-                "6) 到【1.5 計費與付款】計算運費、產生帳單、查看帳單歷史。\n\n" +
-                hr() + "\n" +
-                "角色/權限概要（系統核心會做限制）：\n" +
-                "• 管理員 / 客服人員：可建立包裹、可新增多數追蹤事件、可做查詢與帳單操作。\n" +
-                "• 倉儲人員：追蹤事件通常限於「入倉/出倉/分揀」。\n" +
-                "• 駕駛員：追蹤事件通常限於「進/出貨車、運送中、外送、投遞、簽收、異常」。\n" +
-                "• 客戶：只能查詢/檢視「自己的」貨件；建立包裹通常也限於自己的帳號。\n\n" +
-                "如需進一步協助，請聯絡系統管理員或參閱系統文件。";
+                        "建議操作順序（最常用流程）：\n" +
+                        "1) 先登入（啟動即要求登入；或到【1.6 安全與權限】）。\n" +
+                        "2) 到【1.1 客戶管理】建立客戶檔案（姓名/地址/電話/Email + 客戶類型 + 帳單偏好）。\n" +
+                        "3) 到【1.2 包裹服務分類】建立服務類型（包裹類型/重量級距/配送時效 + 定價與附加費）。\n" +
+                        "4) 到【1.3 包裹收件與準備】建立包裹（系統會自動分配追蹤編號）。\n" +
+                        "5) 到【1.4 追蹤與物流】新增追蹤事件、查目前狀態、查歷史、依條件搜尋。\n" +
+                        "6) 到【1.5 計費與付款】計算運費、產生帳單、查看帳單歷史。\n\n" +
+                        hr() + "\n" +
+                        "角色/權限概要（系統核心會做限制）：\n" +
+                        "• 管理員 / 客服人員：可建立包裹、可新增多數追蹤事件、可做查詢與帳單操作。\n" +
+                        "• 倉儲人員：追蹤事件通常限於「入倉/出倉/分揀」。\n" +
+                        "• 駕駛員：追蹤事件通常限於「進/出貨車、運送中、外送、投遞、簽收、異常」。\n" +
+                        "• 客戶：只能查詢/檢視「自己的」貨件；建立包裹通常也限於自己的帳號。\n\n" +
+                        "如需進一步協助，請聯絡系統管理員或參閱系統文件。";
         report("教學/操作說明", text);
     }
 
@@ -128,7 +155,8 @@ public class LogisticsSwingRunner {
             case 0 -> createCustomerUI();
             case 1 -> viewCustomerUI();
             case 2 -> listCustomersUI();
-            default -> { }
+            default -> {
+            }
         }
     }
 
@@ -248,7 +276,8 @@ public class LogisticsSwingRunner {
         switch (c) {
             case 0 -> createServiceTypeUI();
             case 1 -> listServiceTypesUI();
-            default -> { }
+            default -> {
+            }
         }
     }
 
@@ -432,7 +461,8 @@ public class LogisticsSwingRunner {
             case 5 -> searchByDateRangeUI();
             case 6 -> searchByTruckIdUI();
             case 7 -> searchByWarehouseIdUI();
-            default -> { }
+            default -> {
+            }
         }
     }
 
@@ -658,7 +688,8 @@ public class LogisticsSwingRunner {
             case 0 -> calculateChargeUI();
             case 1 -> generateBillingRecordUI();
             case 2 -> showBillingHistoryUI();
-            default -> { }
+            default -> {
+            }
         }
     }
 
@@ -762,13 +793,15 @@ public class LogisticsSwingRunner {
         report("帳單歷史（可捲動）", sb.toString());
     }
 
-    /* ===================== 1.6 安全與權限 ===================== */
+    /* ===================== 1.6 安全與權限（登入 / 註冊 / 登出） ===================== */
 
     private void menuSecurity_1_6() {
-        String[] opts = {
-                "切換登入身份/角色（客服/倉儲/駕駛/管理員/客戶）",
-                "返回"
-        };
+        String[] opts;
+        if (currentUser == null) {
+            opts = new String[]{"登入", "註冊（客戶）", "返回"};
+        } else {
+            opts = new String[]{"登出", "返回"};
+        }
 
         int c = JOptionPane.showOptionDialog(
                 null, "1.6 安全與權限", "安全與權限",
@@ -776,43 +809,277 @@ public class LogisticsSwingRunner {
                 null, opts, opts[0]
         );
 
-        if (c == 0) switchUser();
+        if (c == -1) return;
+
+        if (currentUser == null) {
+            if (c == 0) {
+                loginDialog();
+            } else if (c == 1) {
+                registerCustomerDialog();
+            }
+        } else {
+            if (c == 0) {
+                logout();
+                // 登出後要求重新登入/註冊；若選擇離開則退出
+                if (!ensureLoggedIn()) {
+                    showMessage("已離開系統。");
+                    System.exit(0);
+                }
+            }
+        }
     }
 
-    private void switchUser() {
-        Role role = pickEnum(
-                "切換角色",
-                "請選擇角色：",
-                Role.values(),
-                this::roleZh,
-                currentUser.getRole()
+    /* ===================== Login / Register UI ===================== */
+
+    private void bootstrapDefaultAccounts() {
+        if (defaultAccountsBootstrapped) return;
+        defaultAccountsBootstrapped = true;
+
+        // 內建員工帳號（示範用）
+        registerInternal("admin", "admin1234", Role.ADMIN, null);
+        registerInternal("cs", "cs123456", Role.CUSTOMER_SERVICE, null);
+        registerInternal("wh", "wh123456", Role.WAREHOUSE, null);
+        registerInternal("driver", "driver123456", Role.DRIVER, null);
+    }
+
+    private boolean ensureLoggedIn() {
+        while (currentUser == null) {
+            String[] opts = {"登入", "註冊（客戶）", "離開"};
+            int c = JOptionPane.showOptionDialog(
+                    null,
+                    "請先登入或註冊（客戶）。\n\n內建員工帳號：\n" +
+                            "- admin / admin1234\n" +
+                            "- cs / cs123456\n" +
+                            "- wh / wh123456\n" +
+                            "- driver / driver123456\n",
+                    "登入/註冊",
+                    JOptionPane.DEFAULT_OPTION,
+                    JOptionPane.INFORMATION_MESSAGE,
+                    null,
+                    opts,
+                    opts[0]
+            );
+
+            if (c == -1 || c == 2) return false;
+            if (c == 0) {
+                if (!loginDialog()) continue;
+            } else if (c == 1) {
+                if (!registerCustomerDialog()) continue;
+            }
+        }
+        return true;
+    }
+
+    private boolean loginDialog() {
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+
+        JTextField usernameField = new JTextField(16);
+        JPasswordField passwordField = new JPasswordField(16);
+
+        panel.add(new JLabel("帳號："));
+        panel.add(usernameField);
+        panel.add(Box.createVerticalStrut(8));
+        panel.add(new JLabel("密碼："));
+        panel.add(passwordField);
+
+        int ok = JOptionPane.showConfirmDialog(
+                null, panel, "登入",
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.PLAIN_MESSAGE
         );
-        if (role == null) return;
+        if (ok != JOptionPane.OK_OPTION) return false;
 
-        if (role == Role.CUSTOMER) {
-            Customer c = pickCustomerOrAskToCreate();
-            if (c == null) return;
+        String u = normalizeUsername(usernameField.getText());
+        String p = new String(passwordField.getPassword());
+        validatePassword(p);
 
-            currentUser = new User("customer#" + c.id, Role.CUSTOMER, c);
+        Account acc = accounts.get(u);
+        if (acc == null) {
+            error("登入失敗", "帳號不存在。");
+            return false;
+        }
 
-            info("切換身份成功",
-                    h1("已切換角色") + "\n" +
-                            kvBlock(
-                                    "新角色", roleZh(Role.CUSTOMER),
-                                    "綁定客戶編號", c.id,
-                                    "綁定客戶姓名", c.name
-                            )
-            );
-        } else {
-            currentUser = new User(role.name().toLowerCase(), role, null);
+        String actualHash = hashPassword(p);
+        if (!acc.passwordHash.equals(actualHash)) {
+            error("登入失敗", "密碼錯誤。");
+            return false;
+        }
 
-            info("切換身份成功",
-                    h1("已切換角色") + "\n" +
-                            kvBlock(
-                                    "新角色", roleZh(role),
-                                    "登入帳號", currentUser.getUsername()
-                            )
-            );
+        currentUser = new User(acc.username, acc.role, acc.customerProfileOrNull);
+
+        info("登入成功",
+                h1("登入成功") + "\n" +
+                        kvBlock(
+                                "登入帳號", currentUser.getUsername(),
+                                "角色", roleZh(currentUser.getRole()),
+                                "綁定客戶", (currentUser.getRole() == Role.CUSTOMER && currentUser.getCustomerProfile() != null)
+                                        ? (currentUser.getCustomerProfile().name + "（#" + currentUser.getCustomerProfile().id + "）")
+                                        : "(無)"
+                        )
+        );
+        return true;
+    }
+
+    private boolean registerCustomerDialog() {
+        JPanel panel = new JPanel();
+        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+
+        JTextField usernameField = new JTextField(16);
+        JPasswordField passwordField = new JPasswordField(16);
+        JPasswordField password2Field = new JPasswordField(16);
+
+        panel.add(new JLabel("帳號（將用於登入）："));
+        panel.add(usernameField);
+        panel.add(Box.createVerticalStrut(8));
+        panel.add(new JLabel("密碼（至少 6 碼）："));
+        panel.add(passwordField);
+        panel.add(Box.createVerticalStrut(8));
+        panel.add(new JLabel("確認密碼："));
+        panel.add(password2Field);
+
+        int ok = JOptionPane.showConfirmDialog(
+                null, panel, "註冊（客戶）",
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.PLAIN_MESSAGE
+        );
+        if (ok != JOptionPane.OK_OPTION) return false;
+
+        String u = normalizeUsername(usernameField.getText());
+        String p1 = new String(passwordField.getPassword());
+        String p2 = new String(password2Field.getPassword());
+
+        validatePassword(p1);
+        if (!p1.equals(p2)) {
+            error("註冊失敗", "兩次密碼不一致。");
+            return false;
+        }
+        if (accounts.containsKey(u)) {
+            error("註冊失敗", "帳號已存在：" + u);
+            return false;
+        }
+
+        // 客戶註冊必須綁定 customer profile
+        Customer customerProfile = pickOrCreateCustomerForRegister();
+        if (customerProfile == null) return false;
+
+        registerInternal(u, p1, Role.CUSTOMER, customerProfile);
+
+        // 註冊後直接登入
+        currentUser = new User(u, Role.CUSTOMER, customerProfile);
+
+        info("註冊成功",
+                h1("客戶註冊完成") + "\n" +
+                        kvBlock(
+                                "登入帳號", currentUser.getUsername(),
+                                "角色", roleZh(currentUser.getRole()),
+                                "綁定客戶編號", customerProfile.id,
+                                "綁定客戶姓名", customerProfile.name
+                        )
+        );
+        return true;
+    }
+
+    private Customer pickOrCreateCustomerForRegister() {
+        String[] opts = {"綁定既有客戶檔案", "建立新客戶檔案", "取消"};
+        int c = JOptionPane.showOptionDialog(
+                null,
+                "客戶帳號必須綁定一筆客戶檔案（Customer Profile）。\n請選擇：",
+                "綁定客戶檔案",
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.INFORMATION_MESSAGE,
+                null,
+                opts,
+                opts[0]
+        );
+
+        if (c == -1 || c == 2) return null;
+
+        if (c == 0) {
+            if (customersCreated.isEmpty()) {
+                info("提示", "目前尚未建立任何客戶，請先建立新客戶檔案。");
+                return createCustomerProfileWizard();
+            }
+            return pickCustomerOrAskToCreate();
+        }
+
+        return createCustomerProfileWizard();
+    }
+
+    private Customer createCustomerProfileWizard() {
+        String name = askNonEmpty("（註冊用）輸入客戶姓名：");
+        if (name == null) return null;
+
+        String address = askNonEmpty("（註冊用）輸入地址：");
+        if (address == null) return null;
+
+        String phone = askOptional("（註冊用）輸入電話（可空白）：");
+        if (phone == null) return null;
+
+        String email = askOptional("（註冊用）輸入Email（可空白）：");
+        if (email == null) return null;
+
+        CustomerType type = pickEnum(
+                "選擇客戶類型",
+                "請選擇客戶類型：",
+                CustomerType.values(),
+                this::customerTypeZh,
+                CustomerType.NON_CONTRACT
+        );
+        if (type == null) return null;
+
+        BillingPreference pref = pickEnum(
+                "選擇帳單偏好",
+                "請選擇帳單偏好：",
+                BillingPreference.values(),
+                this::billingPrefZh,
+                BillingPreference.CASH_ON_DELIVERY
+        );
+        if (pref == null) return null;
+
+        Customer customer = core.createCustomer(name, address, phone, email, type, pref);
+        customersCreated.put(customer.id, customer);
+        return customer;
+    }
+
+    private void logout() {
+        if (currentUser == null) return;
+        info("登出", "已登出：" + currentUser.getUsername());
+        currentUser = null;
+    }
+
+    private void registerInternal(String username, String rawPassword, Role role, Customer customerProfileOrNull) {
+        String u = normalizeUsername(username);
+        validatePassword(rawPassword);
+
+        if (role == null) throw new IllegalArgumentException("role is null");
+        if (accounts.containsKey(u)) throw new IllegalArgumentException("username 已存在：" + u);
+        if (role == Role.CUSTOMER && customerProfileOrNull == null) {
+            throw new IllegalArgumentException("CUSTOMER 角色必須綁定 customerProfile");
+        }
+
+        accounts.put(u, new Account(u, hashPassword(rawPassword), role, customerProfileOrNull));
+    }
+
+    private String normalizeUsername(String username) {
+        if (username == null) throw new IllegalArgumentException("username is null");
+        String u = username.trim().toLowerCase(Locale.ROOT);
+        if (u.isEmpty()) throw new IllegalArgumentException("username is blank");
+        return u;
+    }
+
+    private void validatePassword(String password) {
+        if (password == null) throw new IllegalArgumentException("password is null");
+        if (password.trim().length() < 6) throw new IllegalArgumentException("password 長度需至少 6");
+    }
+
+    private String hashPassword(String rawPassword) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(rawPassword.getBytes(StandardCharsets.UTF_8));
+            return Base64.getEncoder().encodeToString(digest);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
         }
     }
 
@@ -999,7 +1266,6 @@ public class LogisticsSwingRunner {
         return null;
     }
 
-   
     private String roleZh(Role r) {
         if (r == null) return "-";
         return switch (r) {
@@ -1089,10 +1355,13 @@ public class LogisticsSwingRunner {
     /* ===================== Readable Message / Formatting ===================== */
 
     private String buildHeaderText() {
+        String username = (currentUser == null) ? "(未登入)" : currentUser.getUsername();
+        String role = (currentUser == null) ? "(未登入)" : roleZh(currentUser.getRole());
+
         return h1("物流系統操作介面") + "\n"
                 + kvBlock(
-                "登入帳號", currentUser.getUsername(),
-                "角色", roleZh(currentUser.getRole()),
+                "登入帳號", username,
+                "角色", role,
                 "已建立客戶數", customersCreated.size(),
                 "已建立服務類型數", serviceTypesCreated.size(),
                 "已建立貨件數", trackingNumbersCreated.size()
@@ -1118,7 +1387,7 @@ public class LogisticsSwingRunner {
         JOptionPane.showMessageDialog(null, pane, title, JOptionPane.INFORMATION_MESSAGE);
     }
 
-    // 保留你原本呼叫 showMessage 的習慣：自動判斷長短
+
     private void showMessage(String msg) {
         if (msg == null) {
             info("訊息", "(no content)");
